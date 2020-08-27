@@ -56,6 +56,18 @@ Qed.
 
 Hint Resolve VariablesNeverClosed : lc_step_db.
 
+Lemma closedHierarchy: forall n m t, NClosed n t -> m >= n -> NClosed m t.
+Admitted.
+Corollary closedEverywhere: forall n t, closed t -> NClosed n t.
+Proof.
+  move => n t Hclosed.
+  apply: closedHierarchy.
+  - apply: Hclosed.
+  - by apply Nat.leb_le.
+Qed.
+
+Hint Resolve closedEverywhere : lc_step_db.
+
 Fixpoint isNClosed (n: nat) (term: LC): bool := match term with
 | #m    => Nat.ltb m n
 | s @ t => (isNClosed n s) && (isNClosed n t)
@@ -124,6 +136,11 @@ Proof.
 Qed.
 
 Hint Resolve ClosedTermsStableUnderUpticking : lc_step_db.
+
+Lemma CanonicalUpticking: forall s t, variablesUpticked s t -> t = uptickVariables s.
+Proof. Admitted. (* we should prove this via a yet-to-be-created reflection view. *)
+
+Hint Resolve CanonicalUpticking : lc_step_db.
 
 (*
 
@@ -293,6 +310,7 @@ Inductive lcOpSem : LC -> LC -> Prop :=
 
 
 Notation "s '-->*' t" := (clos_refl_trans LC lcOpSem s t) (at level 65).
+Notation "s '<-->*' t" := (clos_refl_sym_trans LC lcOpSem s t) (at level 65).
 
 Example identity: forall t, (\ #0) t --> t.
 Proof. by do ! constructor. Qed.
@@ -351,7 +369,7 @@ Proof. by simpl. Qed.
 Compute (internalizeLC (\ #0 @ #0)).
 
 (* Church Encodings of tuples *)
-Definition lc_pair (x y: LC): LC := \ (#0) x y.
+Definition lc_pair: LC := \ \ \ (#0) (#2) (#1).
 Definition lc_fst: LC := \ (#0) (\ \ (#1)).
 Definition lc_snd: LC := \ (#0) (\ \ (#0)).
 
@@ -392,7 +410,7 @@ Definition evalLamInterp: LC := \ \ \          (* \t. \ctx. \v. *)
 (* Finally, the evaluator just folds on internalized LC terms by the above interpretations and starts with an empty (nil) context. *)
 Definition evaluator: LC := \ (#0) evalVarInterp evalAppInterp evalLamInterp lc_nil.
 
-Lemma lem: closed evalVarInterp.
+(*Lemma lem: closed evalVarInterp.
 Proof.
   rewrite /closed.
   move /closedP.
@@ -419,3 +437,4 @@ Proof.
   do ! constructor.
   apply: betaRed.
 
+*)
