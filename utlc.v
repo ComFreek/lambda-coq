@@ -71,16 +71,15 @@ Hint Resolve closedP : lc_step_db.
 
 Lemma andb_left: forall b b', b && b' -> b.
 Proof.
-  move => b b' H.
-  Check Bool.andb_prop_elim.
-  apply Bool.not_false_iff_true.
-  move => Hfalse.
-  rewrite Hfalse in H.
-  by simpl in H.
+  move => ? ? H.
+  apply Bool.not_false_iff_true => Hfalse.
+  by rewrite Hfalse in H.
 Qed.
 
 Lemma andb_right: forall b b', b && b' -> b'.
-Admitted.
+Proof.
+  by move => ? ?; rewrite Bool.andb_comm; apply: andb_left.
+Qed.
 
 Lemma closedHierarchy: forall t n m, NClosed n t -> m >= n -> NClosed m t.
   elim
@@ -518,20 +517,32 @@ Ltac nlc :=
 
 Example normalization': forall r s t, (\ \ \ #1) r s t -->* s.
 Proof.
-  move => ? ? ?; repeat nlc.
+  by move => ? ? ?; repeat nlc.
 Qed.
 
 Example normalization'': forall t, (\ \ #1) (\ #0) (\ # 0) t -->* t.
 Proof.
-  move => ?; repeat nlc.
+  by move => ?; repeat nlc.
 Qed.
 
-Example normalization''': forall s t, lc_fst (lc_pair s t) -->* s.
+Example normalization''': forall s t, (\ # 0 @ (uptickVariables s) @ (uptickVariables t)) @ (\ (\ # 1)) -->* s.
+Proof.
+  by move => ? ?; repeat nlc.
+Qed.
+
+Example normalization'''': forall s t, (\ \ # 1 @ (uptickVariables (uptickVariables s)) @ (uptickVariables t)) @ (\ (\ # 1)) @ (\ #0) -->* s.
 Proof.
   move => ? ?.
-  do 5 nlc.
-  (* nlc fails here to prove it *)
-Admitted.
+  do 4 nlc.
+  simpl.
+  cbn.
+  apply: rt_trans.
+  - apply: rt_step.
+    
+  try (apply: appStepR).
+  try (by rewrite substituteLevelledComp);
+  auto with lc_step_db (*try apply: UptickedVariablesStableUnderSubstitution.*).
+Qed.
 
 (*
 Example ex: forall t, evaluator (internalizeLC t) -->* t.
