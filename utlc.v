@@ -31,6 +31,10 @@ Local Open Scope lc_scope.
 
 Check (\ \ #0 @ #1). (* \x. \y. x y *)
 
+Definition LC_eq_dec: forall (s t: LC), { s = t } + { s <> t }.
+  do 2 decide equality.
+Defined.
+
 (* A more general notion of closedness: a term is n-closed iff. it accesses at most variables with de Bruijn indices < n.
 
 
@@ -44,20 +48,62 @@ Inductive NClosed (n: nat) : LC -> Prop :=
 
 Definition closed : LC -> Prop := NClosed 0.
 
-Lemma BiggerVariablesNotClosed: forall n m, n <=? m -> ~(NClosed n (#m)).
-Proof.
-  move => n m Hgt H.
-Admitted.
+Fixpoint isNClosed (n: nat) (term: LC): bool := match term with
+| #m    => Nat.ltb m n
+| s @ t => (isNClosed n s) && (isNClosed n t)
+| \ t   => isNClosed (S n) t
+end.
 
-Corollary VariablesNeverClosed: forall n, ~closed (#n).
+Lemma closedP: forall t n, reflect (NClosed n t) (isNClosed n t).
 Proof.
-  by move => n; apply: (BiggerVariablesNotClosed).
+  elim => [n m | l IH_l k IH_k n | l IH_l n]; simpl.
+  - case E: (n <? m); do ! constructor => //.
+    by move => H; inversion H; rewrite E in H1.
+  - by case: (IH_l );
+       case: (IH_k n) => ? ? //;
+       try (by apply: ReflectT; do ! constructor);
+       try (by apply: ReflectF => H; inversion H).
+  - case: (IH_l (S n)) => H; do ! constructor => //.
+    by move => wrongHip; inversion wrongHip.
 Qed.
 
-Hint Resolve VariablesNeverClosed : lc_step_db.
+Hint Resolve closedP : lc_step_db.
 
-Lemma closedHierarchy: forall n m t, NClosed n t -> m >= n -> NClosed m t.
+Lemma andb_left: forall b b', b && b' -> b.
+Proof.
+  move => b b' H.
+  Check Bool.andb_prop_elim.
+  apply Bool.not_false_iff_true.
+  move => Hfalse.
+  rewrite Hfalse in H.
+  by simpl in H.
+Qed.
+
+Lemma andb_right: forall b b', b && b' -> b'.
 Admitted.
+
+Lemma closedHierarchy: forall t n m, NClosed n t -> m >= n -> NClosed m t.
+  elim
+    => [t n m|t IHt t' IHt' n m|t IHt n m] Hclosed Hcmp;
+    constructor;
+    try move /closedP in Hclosed; simpl in Hclosed.
+
+  - move /Nat.leb_le in Hclosed.
+    apply Nat.leb_le.
+    lia.
+  - apply: IHt.
+    * by apply /closedP; exact (andb_left Hclosed).
+    * by exact Hcmp.
+  - apply: IHt'. (* symmetric to last case *)
+    * by apply /closedP; exact (andb_right Hclosed).
+    * by exact Hcmp.
+  - apply: IHt.
+    + apply /closedP. exact Hclosed.
+    + apply Nat.leb_le.
+      apply Nat.leb_le in Hcmp.
+      by simpl.
+Qed.
+
 Corollary closedEverywhere: forall n t, closed t -> NClosed n t.
 Proof.
   move => n t Hclosed.
@@ -68,27 +114,20 @@ Qed.
 
 Hint Resolve closedEverywhere : lc_step_db.
 
-Fixpoint isNClosed (n: nat) (term: LC): bool := match term with
-| #m    => Nat.ltb m n
-| s @ t => (isNClosed n s) && (isNClosed n t)
-| \ t   => isNClosed (S n) t
-end.
-
-Lemma closedP: forall n t, reflect (NClosed n t) (isNClosed n t).
+Lemma BiggerVariablesNotClosed: forall n m, n <=? m -> ~(NClosed n (#m)).
 Proof.
-  elim => [t|t].
-  - elim: t => [n|l IH_l k IH_k|].
-    + simpl.
-      have U: (n <? 0 = false). admit.
-      rewrite U; clear U.
-      constructor.
-      auto with lc_step_db.
-    + simpl.
-      case Hl_closed: (isNClosed 0 l); case Hk_closed: (isNClosed 0 k); simpl.
-      * apply: ReflectT; constructor.
-        Admitted.
+  move => ? ? Hcmp.
+  apply /closedP => //.
+  by rewrite Nat.leb_antisym in Hcmp.
+Qed.
 
-Hint Resolve closedP : lc_step_db.
+Corollary VariablesNeverClosed: forall n, ~closed (#n).
+Proof.
+  by move => n; apply: (BiggerVariablesNotClosed).
+Qed.
+
+Hint Resolve VariablesNeverClosed : lc_step_db.
+
 
 Inductive variablesUpdated (n delta: nat): LC -> LC -> Prop :=
   | deltaOnVarUntouched: forall m, Nat.ltb m n -> variablesUpdated n delta (#m) (#m)
@@ -175,6 +214,33 @@ Inductive levelledSubstitution (n: nat): LC -> LC -> LC -> Prop :=
 
 Notation "s '//' t '-->' s'" := (levelledSubstitution 0 s t s') (at level 60, no associativity).
 
+Fixpoint substituteLevelled (n: nat) (s t: LC): LC := match s with
+| #m => match (Nat.compare m n) with
+    | Eq => t
+    | Lt => s (* unchanged, no substitution *)
+    | Gt => #(pred m)
+  end
+
+| l @ k => (substituteLevelled n l t) @ (substituteLevelled n k t)
+| (\ l) => \ (substituteLevelled (S n) l (uptickVariables t))
+end.
+
+Lemma substituteLevelledP: forall n s t s', reflect (levelledSubstitution n s t s') (is_left (LC_eq_dec (substituteLevelled n s t) s')).
+Proof.
+  move => n s.
+  generalize dependent n.
+  elim: s => //.
+  - move => m n t s'.
+    case Hcmp: (compare m n).
+    * (* Nat.compare_eq: forall x y : nat, (x ?= y) = Eq -> x = y *)
+      rewrite (Nat.compare_eq _ _ Hcmp).
+      simpl; rewrite Nat.compare_refl.
+      case Heq: (LC_eq_dec t s').
+Admitted.
+
+Lemma substituteLevelledComp: forall n s t s', (levelledSubstitution n s t s') <-> s' = substituteLevelled n s t.
+Admitted.
+
 Lemma ltbIrreflexive: forall n, ~(n <? n).
 Proof.
   by elim => [|n IHn]; cbn.
@@ -201,11 +267,7 @@ Proof.
       apply: BiggerVariablesNotClosed.
       apply Nat.leb_le.
       lia.
-
-  - constructor.
-    + by apply: IH_l; inversion H.
-    + by apply: IH_k; inversion H.
-
+  - by constructor; [apply: IH_l|apply: IH_k]; inversion H.
   - have Hclosed_body: (NClosed (S n) l) by inversion Hclosed_abstraction.
     apply: lamRepl.
     + apply: UptickVariablesReflection.
@@ -250,9 +312,7 @@ Proof.
       constructor.
       by apply Nat.ltb_lt; lia.
 
-  - simpl; constructor.
-    + by apply: IH_l.
-    + by apply: IH_k.
+  - by simpl; constructor; [apply: IH_l|apply: IH_k].
   - econstructor.
     + apply: UptickVariablesReflection.
     + fold updateVariables.
@@ -263,6 +323,12 @@ Corollary UptickedVariablesStableUnderSubstitution: forall s t, uptickVariables 
 Proof. by apply: NUpdatedVariablesStableUnderSubstitution. Qed.
 
 Hint Resolve UptickedVariablesStableUnderSubstitution : lc_step_db.
+
+Corollary UptickedVariablesStableUnderSubstitution': forall s t, substituteLevelled 0 (uptickVariables s) t = s.
+Proof.
+Admitted.
+
+Hint Resolve UptickedVariablesStableUnderSubstitution' : lc_step_db.
 
 Module VarReplExamples.
 Example ex0: forall term, (#0) // term --> term.
@@ -394,7 +460,7 @@ Definition lc_tail: LC := \ (*list*) lc_fst (
 (* The variable interpretation returns a function receiving a context
    and returning the respective variable from that, i.e., the n-th entry. *)
 Definition evalVarInterp: LC := \ \            (* \n. \ctx. *)
-  lc_head ((#1) (#0) lc_tail).                       (* head ((n ctx) tail) *)
+  lc_head ((#1) (#0) lc_tail).                 (* head ((n ctx) tail) *)
 
 (* T *)
 Definition evalAppInterp: LC := \ \ \          (* \s. \t. \ctx. *)
@@ -405,30 +471,108 @@ Definition evalAppInterp: LC := \ \ \          (* \s. \t. \ctx. *)
    (i.e. beta reduced) lambda's function body.
  *)
 Definition evalLamInterp: LC := \ \ \          (* \t. \ctx. \v. *)
-  (#2) (lc_cons (#0) (#1)).                          (* t (cons v ctx) *)
+  (#2) (lc_cons (#0) (#1)).                    (* t (cons v ctx) *)
 
 (* Finally, the evaluator just folds on internalized LC terms by the above interpretations and starts with an empty (nil) context. *)
 Definition evaluator: LC := \ (#0) evalVarInterp evalAppInterp evalLamInterp lc_nil.
 
-(*Lemma lem: closed evalVarInterp.
+Lemma evalVarInterpClosed: closed evalVarInterp.
+Proof. by apply /closedP => //. Qed.
+Lemma evalAppInterpClosed: closed evalAppInterp.
+Proof. by apply /closedP => //. Qed.
+Lemma evalLamInterpClosed: closed evalLamInterp.
+Proof. by apply /closedP => //. Qed.
+
+Hint Resolve evalVarInterpClosed evalAppInterpClosed evalLamInterpClosed : lc_step_db.
+
+(* trivial substitution to closed terms *)
+Ltac trivsubst :=
+  match goal with
+  | |- (levelledSubstitution 0 ?s ?t ?s') =>
+     try (
+       apply: ClosedTermsStableUnderSubstitution; apply /closedP; simpl
+     )
+  end.
+
+(* single step LC *)
+Ltac slc :=
+  try (apply: betaRed || (apply: appStepL; slc) || (apply: appStepR; slc));
+  try (by rewrite substituteLevelledComp);
+  auto with lc_step_db (*try apply: UptickedVariablesStableUnderSubstitution.*).
+
+(* normalize LC (i.e., multi-step LC) *)
+Ltac nlc :=
+  match goal with
+  | |- ?s -->* ?t =>
+    do 1 (
+      apply: rt_trans;
+      [
+        apply: rt_step; slc (* no try, fail here if slc fails! *)
+      |
+        simpl;
+        (try rewrite UptickedVariablesStableUnderSubstitution');
+        (try apply: rt_refl)
+      ]
+    )
+  end.
+
+Example normalization': forall r s t, (\ \ \ #1) r s t -->* s.
 Proof.
-  rewrite /closed.
-  move /closedP.
-Lemma lem1: closed evalAppInterp. Admitted.
+  move => ? ? ?; repeat nlc.
+Qed.
 
-Hint Resolve lem lem1 : lc_step_db.
+Example normalization'': forall t, (\ \ #1) (\ #0) (\ # 0) t -->* t.
+Proof.
+  move => ?; repeat nlc.
+Qed.
 
-Example ex: forall t, evaluator (internalizeLC ((\ #0) t)) -->* t.
+Example normalization''': forall s t, lc_fst (lc_pair s t) -->* s.
+Proof.
+  move => ? ?.
+  do 5 nlc.
+  (* nlc fails here to prove it *)
+Admitted.
+
+(*
+Example ex: forall t, evaluator (internalizeLC t) -->* t.
 Proof.
   move => t.
-  rewrite /evaluator.
-
+  do 4 nlc.
+  nlc.
+  - 
+  repeat nlc.
+  nlc.
   apply: rt_trans.
   - constructor.
     apply: betaRed.
     constructor.
+    + do ! constructor; auto with lc_step_db.
+    + auto with lc_step_db.
+      by trivsubst.
+  - apply: rt_trans.
     + constructor.
-      * constructor. constructor. constructor.
+      do 3 ! apply: appStepL.
+      apply: betaRed.
+      by rewrite substituteLevelledComp.
+    + simpl.
+      
+      apply: rt_trans.
+      constructor.
+      * do 2 apply: appStepL.
+        apply: betaRed.
+        by rewrite substituteLevelledComp.
+      * 
+      * 
+      simpl.
+      simpl.
+      apply substituteLevelledP.
+      
+      simpl.
+      
+    cbv.
+      cbn.
+      * 
+        auto with lc_step_db.
         assert (K: closed evalVarInterp). admit. auto 10 with lc_step_db.
         apply: ClosedTermsStableUnderSubstitution. auto with lc_step_db.
   apply betaRed.
